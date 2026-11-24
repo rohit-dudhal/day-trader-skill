@@ -84,7 +84,7 @@ PRICE_FIELDS = ("qty", "notional", "limit_price", "stop_price", "take_profit_lim
 TYPES = {"market", "limit", "stop", "stop_limit", "trailing_stop"}
 TIFS = {"day", "gtc", "opg", "cls", "ioc", "fok"}
 OCC = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
-TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
+TICKER = re.compile(r"^[A-Z0-9&\-]{1,15}(\.[A-Z]{1,4})?$")
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 CENT = 0.005
 FRESH_MINUTES = 15
@@ -118,6 +118,50 @@ NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
     "2026-12-24": "Christmas Eve",
     "2027-11-26": "day after Thanksgiving",
 }
+NSE_HOLIDAYS = {
+    "2026-01-26": "Republic Day",
+    "2026-02-17": "Mahashivratri",
+    "2026-03-14": "Holi",
+    "2026-03-31": "Id-Ul-Fitr (Ramadan Eid)",
+    "2026-04-02": "Ram Navami",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-06-07": "Bakri Id (Eid ul-Adha)",
+    "2026-07-07": "Muharram",
+    "2026-08-15": "Independence Day",
+    "2026-08-16": "Janmashtami",
+    "2026-09-05": "Milad-un-Nabi (Prophet Mohammad's Birthday)",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-10-21": "Dussehra (additional)",
+    "2026-11-09": "Diwali (Laxmi Puja)",
+    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-19": "Guru Nanak Jayanti",
+    "2026-12-25": "Christmas",
+    "2027-01-26": "Republic Day",
+    "2027-03-04": "Maha Shivaratri",
+    "2027-03-22": "Id-Ul-Fitr (Ramadan Eid)",
+    "2027-03-29": "Holi",
+    "2027-04-02": "Good Friday",
+    "2027-04-14": "Dr. Ambedkar Jayanti",
+    "2027-04-20": "Ram Navami",
+    "2027-05-01": "Maharashtra Day",
+    "2027-05-27": "Bakri Id (Eid ul-Adha)",
+    "2027-06-25": "Muharram",
+    "2027-08-15": "Independence Day",
+    "2027-08-25": "Milad-un-Nabi (Prophet Mohammad's Birthday)",
+    "2027-09-04": "Janmashtami",
+    "2027-10-02": "Mahatma Gandhi Jayanti",
+    "2027-10-08": "Dussehra",
+    "2027-10-29": "Diwali (Laxmi Puja)",
+    "2027-10-30": "Diwali Balipratipada",
+    "2027-11-08": "Guru Nanak Jayanti",
+    "2027-12-25": "Christmas",
+}
+NSE_OPEN = datetime.time(9, 15)
+NSE_CLOSE = datetime.time(15, 30)
+NSE_EARLY_CLOSE = {}
 CALENDAR_YEARS = (2026, 2027)
 OPEN = datetime.time(9, 30)
 CLOSE = datetime.time(16, 0)
@@ -150,6 +194,25 @@ def eastern_offset(utc):
 def to_eastern(utc):
     return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
 
+
+def is_india(sym=None, cfg=None):
+    if cfg and (str(cfg.get("market") or "").upper() == "NSE" or str(cfg.get("currency") or "").upper() == "INR"):
+        return True
+    if sym:
+        s = str(sym).upper().strip()
+        if s.endswith(".NS") or s.endswith(".BO"):
+            return True
+    return False
+
+
+def to_ist(utc):
+    if hasattr(utc, "utcoffset") and utc.utcoffset() is not None:
+        utc = utc - utc.utcoffset()
+    return utc.replace(tzinfo=None) + datetime.timedelta(hours=5, minutes=30)
+
+
+def ist_to_utc(local):
+    return local - datetime.timedelta(hours=5, minutes=30)
 
 def eastern_to_utc(local):
     for off in (-4, -5):
@@ -185,13 +248,15 @@ def parse_utc(text):
     return dt
 
 
-def trading_day(d):
-    """(is_trading_day, reason). Weekends and the NYSE holiday list."""
+def trading_day(d, india=False):
+    """(is_trading_day, reason). Weekends and the NYSE/NSE holiday list."""
     if d.weekday() >= 5:
         return False, "weekend"
-    name = NYSE_HOLIDAYS.get(d.isoformat())
+    hols = NSE_HOLIDAYS if india else NYSE_HOLIDAYS
+    prefix = "NSE holiday: " if india else "NYSE holiday: "
+    name = hols.get(d.isoformat())
     if name:
-        return False, "NYSE holiday: " + name
+        return False, prefix + name
     return True, ""
 
 

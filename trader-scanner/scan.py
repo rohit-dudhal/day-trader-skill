@@ -120,6 +120,50 @@ NYSE_EARLY_CLOSE = {  # 1:00 p.m. ET
     "2026-12-24": "Christmas Eve",
     "2027-11-26": "day after Thanksgiving",
 }
+NSE_HOLIDAYS = {
+    "2026-01-26": "Republic Day",
+    "2026-02-17": "Mahashivratri",
+    "2026-03-14": "Holi",
+    "2026-03-31": "Id-Ul-Fitr (Ramadan Eid)",
+    "2026-04-02": "Ram Navami",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-06-07": "Bakri Id (Eid ul-Adha)",
+    "2026-07-07": "Muharram",
+    "2026-08-15": "Independence Day",
+    "2026-08-16": "Janmashtami",
+    "2026-09-05": "Milad-un-Nabi (Prophet Mohammad's Birthday)",
+    "2026-10-02": "Mahatma Gandhi Jayanti",
+    "2026-10-20": "Dussehra",
+    "2026-10-21": "Dussehra (additional)",
+    "2026-11-09": "Diwali (Laxmi Puja)",
+    "2026-11-10": "Diwali Balipratipada",
+    "2026-11-19": "Guru Nanak Jayanti",
+    "2026-12-25": "Christmas",
+    "2027-01-26": "Republic Day",
+    "2027-03-04": "Maha Shivaratri",
+    "2027-03-22": "Id-Ul-Fitr (Ramadan Eid)",
+    "2027-03-29": "Holi",
+    "2027-04-02": "Good Friday",
+    "2027-04-14": "Dr. Ambedkar Jayanti",
+    "2027-04-20": "Ram Navami",
+    "2027-05-01": "Maharashtra Day",
+    "2027-05-27": "Bakri Id (Eid ul-Adha)",
+    "2027-06-25": "Muharram",
+    "2027-08-15": "Independence Day",
+    "2027-08-25": "Milad-un-Nabi (Prophet Mohammad's Birthday)",
+    "2027-09-04": "Janmashtami",
+    "2027-10-02": "Mahatma Gandhi Jayanti",
+    "2027-10-08": "Dussehra",
+    "2027-10-29": "Diwali (Laxmi Puja)",
+    "2027-10-30": "Diwali Balipratipada",
+    "2027-11-08": "Guru Nanak Jayanti",
+    "2027-12-25": "Christmas",
+}
+NSE_OPEN = datetime.time(9, 15)
+NSE_CLOSE = datetime.time(15, 30)
+NSE_EARLY_CLOSE = {}
 CALENDAR_YEARS = (2026, 2027)
 OPEN = datetime.time(9, 30)
 CLOSE = datetime.time(16, 0)
@@ -162,6 +206,27 @@ def to_eastern(utc):
     return utc.replace(tzinfo=None) + datetime.timedelta(hours=eastern_offset(utc))
 
 
+def is_india(symbols=None, cfg=None):
+    if cfg and (str(cfg.get("market") or "").upper() == "NSE" or str(cfg.get("currency") or "").upper() == "INR"):
+        return True
+    if symbols:
+        sym_list = [symbols] if isinstance(symbols, str) else list(symbols)
+        for s in sym_list:
+            su = str(s).upper().strip()
+            if su.endswith(".NS") or su.endswith(".BO"):
+                return True
+    return False
+
+
+def to_ist(utc):
+    if hasattr(utc, "utcoffset") and utc.utcoffset() is not None:
+        utc = utc - utc.utcoffset()
+    return utc.replace(tzinfo=None) + datetime.timedelta(hours=5, minutes=30)
+
+
+def ist_to_utc(local):
+    return local - datetime.timedelta(hours=5, minutes=30)
+
 def eastern_to_utc(local):
     for off in (-4, -5):
         utc = local - datetime.timedelta(hours=off)
@@ -196,21 +261,25 @@ def parse_hhmm(text, flag="--at"):
     return datetime.time(int(m.group(1)), int(m.group(2)))
 
 
-def trading_day(d):
-    """(is_trading_day, reason). Weekends and the NYSE holiday list."""
+def trading_day(d, india=False):
+    """(is_trading_day, reason). Weekends and the NYSE/NSE holiday list."""
     if d.weekday() >= 5:
         return False, "weekend"
-    name = NYSE_HOLIDAYS.get(d.isoformat())
+    hols = NSE_HOLIDAYS if india else NYSE_HOLIDAYS
+    prefix = "NSE holiday: " if india else "NYSE holiday: "
+    name = hols.get(d.isoformat())
     if name:
-        return False, "NYSE holiday: " + name
+        return False, prefix + name
     return True, ""
 
 
-def session(d):
-    """(open_time, close_time) in New York time, or None if closed all day."""
-    ok, _ = trading_day(d)
+def session(d, india=False):
+    """(open_time, close_time) in New York/India time, or None if closed all day."""
+    ok, _ = trading_day(d, india=india)
     if not ok:
         return None
+    if india:
+        return NSE_OPEN, NSE_CLOSE
     return OPEN, (EARLY if d.isoformat() in NYSE_EARLY_CLOSE else CLOSE)
 
 
@@ -268,7 +337,10 @@ def yahoo_get(path):
 
 
 def to_yahoo(sym):
-    return sym.upper().replace(".", "-")
+    s = sym.upper()
+    if s.endswith(".NS") or s.endswith(".BO"):
+        return s
+    return s.replace(".", "-")
 
 
 def spark_path(symbols, rng, interval):
@@ -309,7 +381,10 @@ def parse_spark(text_or_doc, wanted=None):
         if not resp:
             continue
         ysym = item.get("symbol") or (resp[0].get("meta") or {}).get("symbol") or ""
-        sym = (wanted or {}).get(ysym.upper(), ysym.upper().replace("-", "."))
+        if ysym.upper().endswith(".NS") or ysym.upper().endswith(".BO"):
+            sym = (wanted or {}).get(ysym.upper(), ysym.upper())
+        else:
+            sym = (wanted or {}).get(ysym.upper(), ysym.upper().replace("-", "."))
         out[sym] = series_from_result(resp[0])
     if err and not out:
         raise ScanError("Yahoo spark: %s" % (err.get("description") or err.get("code") or err))
@@ -356,7 +431,10 @@ def _absorb(doc, name_hint, data, errors):
                 sym = (doc["chart"].get("result") or [{}])[0]["meta"]["symbol"]
             except (AttributeError, KeyError, TypeError, IndexError):
                 raise ScanError("an offline v8 chart without a symbol: name the file <TICKER>.json")
-        sym = sym.upper().replace("-", ".")
+        if not sym.upper().endswith(".NS") and not sym.upper().endswith(".BO"):
+            sym = sym.upper().replace("-", ".")
+        else:
+            sym = sym.upper()
         try:
             data[sym] = parse_chart(doc, sym)
         except ScanError as e:
@@ -577,26 +655,28 @@ def scan_daily(data, symbols, now_utc, min_price, min_volume):
 
 # ---------------------------------------------------------------- opening-range breakout
 
-def slot(day, k):
-    return datetime.datetime.combine(day, OPEN) + datetime.timedelta(minutes=BAR_MIN * k)
+def slot(day, k, india=False):
+    op = NSE_OPEN if india else OPEN
+    return datetime.datetime.combine(day, op) + datetime.timedelta(minutes=BAR_MIN * k)
 
 
-def session_bars(series, day, cutoff):
-    """5-minute bars of `day` that are complete at `cutoff` (naive New York time),
+def session_bars(series, day, cutoff, india=False):
+    """5-minute bars of `day` that are complete at `cutoff` (naive New York/India time),
     on the grid, with a close. Sorted, one per slot."""
-    s = session(day)
-    close_t = s[1] if s else CLOSE
+    s = session(day, india=india)
+    op = NSE_OPEN if india else OPEN
+    close_t = s[1] if s else (NSE_CLOSE if india else CLOSE)
     out = {}
     hs, ls = series.get("h"), series.get("l")
     for i, ts in enumerate(series["t"]):
         c = series["c"][i]
         if c is None:
             continue
-        et = ts_to_eastern(ts)
+        et = to_ist(datetime.datetime(1970, 1, 1) + datetime.timedelta(seconds=int(ts))) if india else ts_to_eastern(ts)
         if et.date() != day or et.second or et.minute % BAR_MIN:
             continue  # another day, or the live tick off the grid
-        if et.time() < OPEN or et.time() >= close_t:
-            continue  # pre-market, after hours, the 4:00 PM closing print
+        if et.time() < op or et.time() >= close_t:
+            continue  # pre-market, after hours
         if et + datetime.timedelta(minutes=BAR_MIN) > cutoff:
             continue  # still in progress at the cutoff
         v = series.get("v")
@@ -607,16 +687,16 @@ def session_bars(series, day, cutoff):
     return [out[k] for k in sorted(out)]
 
 
-def usable(bars, day, cutoff, n_range):
-    """Every slot from 9:30 to the cutoff is there, and at least the range."""
-    want = int((cutoff - slot(day, 0)).total_seconds() // (BAR_MIN * 60))
-    s = session(day)
+def usable(bars, day, cutoff, n_range, india=False):
+    """Every slot from open to the cutoff is there, and at least the range."""
+    want = int((cutoff - slot(day, 0, india=india)).total_seconds() // (BAR_MIN * 60))
+    s = session(day, india=india)
     if s:
-        want = min(want, int((datetime.datetime.combine(day, s[1]) - slot(day, 0)).total_seconds()
+        want = min(want, int((datetime.datetime.combine(day, s[1]) - slot(day, 0, india=india)).total_seconds()
                              // (BAR_MIN * 60)))
     if want < n_range or len(bars) != want:
         return False
-    return all(b["start"] == slot(day, k) for k, b in enumerate(bars))
+    return all(b["start"] == slot(day, k, india=india) for k, b in enumerate(bars))
 
 
 def orb_candidate(bars, n_range):
@@ -698,8 +778,9 @@ def scan_orb(stage1, symbols, day, cutoff, or_minutes, min_price=0.0, min_volume
         if not s:
             continue
         counts["fetched"] += 1
-        bars = session_bars(s, day, cutoff)
-        if not usable(bars, day, cutoff, n_range):
+        ind = is_india(sym)
+        bars = session_bars(s, day, cutoff, india=ind)
+        if not usable(bars, day, cutoff, n_range, india=ind):
             counts["unusable"] += 1
             continue
         vol = sum(b["v"] for b in bars) if s.get("v") else (s.get("meta") or {}).get("regularMarketVolume") or 0
